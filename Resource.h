@@ -3,20 +3,22 @@
 // Used by WindowsProject1.rc
 
 #define IDS_APP_TITLE			103
+#define IDS_OPEN_FILE_TITLE		104
+#define IDS_SAVE_FILE_TITLE		105
 
 #define IDR_MAINFRAME			128
 #define IDD_ABOUTBOX			103
-#define IDM_ABOUT				104
-#define IDM_EXIT				105
-#define IDM_FILE_OPEN			106
-#define IDM_FILE_SAVE			107
-#define IDM_EDIT_CUT			111
-#define IDM_EDIT_COPY			112
-#define IDM_EDIT_PASTE			113
-#define IDI_GRAPHICSEDITOR			114
-#define IDI_TEXTEDITOR			108
-#define IDC_TEXTEDITOR			109
-#define IDC_GRAPHICSEDITOR			110
+#define IDM_ABOUT				106
+#define IDM_EXIT				107
+#define IDM_FILE_OPEN			108
+#define IDM_FILE_SAVE			109
+#define IDM_EDIT_CUT			113
+#define IDM_EDIT_COPY			114
+#define IDM_EDIT_PASTE			115
+#define IDI_GRAPHICSEDITOR			116
+#define IDI_TEXTEDITOR			110
+#define IDC_TEXTEDITOR			111
+#define IDC_GRAPHICSEDITOR			112
 #ifndef IDC_STATIC
 #define IDC_STATIC				-1
 #endif
