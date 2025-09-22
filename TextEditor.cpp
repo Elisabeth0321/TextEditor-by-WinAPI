@@ -57,6 +57,7 @@ void                PasteText();
 void                SetFileModified(BOOL modified);
 BOOL                PromptSaveChanges(HWND hWnd);
 void                UpdateWindowTitle(HWND hWnd);
+void                LoadFileDialogFilters(WCHAR* filterBuffer, int bufferSize);
 
 int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
     _In_opt_ HINSTANCE hPrevInstance,
@@ -541,12 +542,16 @@ BOOL OpenTextFile(HWND hWnd)
     LoadStringA(hInst, IDS_OPEN_FILE_TITLE, titleAnsi, MAX_LOADSTRING);
     MultiByteToWideChar(CP_ACP, 0, titleAnsi, -1, titleBuffer, MAX_LOADSTRING);
     
+    // Загружаем фильтры из ресурсов
+    WCHAR filterBuffer[MAX_LOADSTRING * 2];
+    LoadFileDialogFilters(filterBuffer, MAX_LOADSTRING * 2);
+    
     ZeroMemory(&ofn, sizeof(ofn));
     ofn.lStructSize = sizeof(ofn);
     ofn.hwndOwner = hWnd;
     ofn.lpstrFile = szFile;
     ofn.nMaxFile = sizeof(szFile);
-    ofn.lpstrFilter = L"Текстовые файлы\0*.txt\0Все файлы\0*.*\0";
+    ofn.lpstrFilter = filterBuffer;
     ofn.nFilterIndex = 1;
     ofn.lpstrTitle = titleBuffer;
     ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST | OFN_ENABLEHOOK | OFN_EXPLORER;
@@ -578,12 +583,95 @@ BOOL OpenTextFile(HWND hWnd)
                     {
                         buffer[bytesRead] = '\0';
                         
+                        // Определяем кодировку файла
+                        UINT codePage = CP_UTF8; // По умолчанию UTF-8
+                        
+                        // Проверяем BOM для UTF-8
+                        if (bytesRead >= 3 && 
+                            (unsigned char)buffer[0] == 0xEF && 
+                            (unsigned char)buffer[1] == 0xBB && 
+                            (unsigned char)buffer[2] == 0xBF)
+                        {
+                            codePage = CP_UTF8;
+                            // Пропускаем BOM
+                            memmove(buffer, buffer + 3, bytesRead - 3);
+                            buffer[bytesRead - 3] = '\0';
+                        }
+                        // Проверяем BOM для UTF-16 LE
+                        else if (bytesRead >= 2 && 
+                                 (unsigned char)buffer[0] == 0xFF && 
+                                 (unsigned char)buffer[1] == 0xFE)
+                        {
+                            // Файл уже в UTF-16 LE, читаем напрямую
+                            WCHAR* wideBuffer = (WCHAR*)buffer;
+                            SetWindowTextW(hEditControl, wideBuffer);
+                            
+                            // Сохраняем имя файла
+                            wcscpy_s(currentFileName, MAX_PATH, szFile);
+                            hasFileName = TRUE;
+                            SetFileModified(FALSE);
+                            UpdateWindowTitle(hWnd);
+                            
+                            free(buffer);
+                            CloseHandle(hFile);
+                            return TRUE;
+                        }
+                        // Проверяем BOM для UTF-16 BE
+                        else if (bytesRead >= 2 && 
+                                 (unsigned char)buffer[0] == 0xFE && 
+                                 (unsigned char)buffer[1] == 0xFF)
+                        {
+                            // Конвертируем UTF-16 BE в UTF-16 LE
+                            for (int i = 0; i < bytesRead - 1; i += 2)
+                            {
+                                char temp = buffer[i];
+                                buffer[i] = buffer[i + 1];
+                                buffer[i + 1] = temp;
+                            }
+                            WCHAR* wideBuffer = (WCHAR*)buffer;
+                            SetWindowTextW(hEditControl, wideBuffer);
+                            
+                            // Сохраняем имя файла
+                            wcscpy_s(currentFileName, MAX_PATH, szFile);
+                            hasFileName = TRUE;
+                            SetFileModified(FALSE);
+                            UpdateWindowTitle(hWnd);
+                            
+                            free(buffer);
+                            CloseHandle(hFile);
+                            return TRUE;
+                        }
+                        // Пробуем определить кодировку по содержимому
+                        else
+                        {
+                            // Сначала пробуем UTF-8
+                            int wideSize = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, buffer, -1, NULL, 0);
+                            if (wideSize > 0)
+                            {
+                                codePage = CP_UTF8;
+                            }
+                            else
+                            {
+                                // Если не UTF-8, пробуем системную кодировку (обычно CP1251 для русского)
+                                wideSize = MultiByteToWideChar(CP_ACP, 0, buffer, -1, NULL, 0);
+                                if (wideSize > 0)
+                                {
+                                    codePage = CP_ACP;
+                                }
+                                else
+                                {
+                                    // Последняя попытка - CP1252 (Latin-1)
+                                    codePage = 1252;
+                                }
+                            }
+                        }
+                        
                         // Конвертируем в Unicode
-                        int wideSize = MultiByteToWideChar(CP_UTF8, 0, buffer, -1, NULL, 0);
+                        int wideSize = MultiByteToWideChar(codePage, 0, buffer, -1, NULL, 0);
                         WCHAR* wideBuffer = (WCHAR*)malloc(wideSize * sizeof(WCHAR));
                         if (wideBuffer)
                         {
-                            MultiByteToWideChar(CP_UTF8, 0, buffer, -1, wideBuffer, wideSize);
+                            MultiByteToWideChar(codePage, 0, buffer, -1, wideBuffer, wideSize);
                             
                             // Устанавливаем текст в EDIT-контрол
                             SetWindowTextW(hEditControl, wideBuffer);
@@ -630,17 +718,52 @@ BOOL SaveTextFile(HWND hWnd)
 
     GetWindowTextW(hEditControl, textBuffer, textLength + 1);
 
-    // Конвертируем в UTF-8
-    int utf8Size = WideCharToMultiByte(CP_UTF8, 0, textBuffer, -1, NULL, 0, NULL, NULL);
-    CHAR* utf8Buffer = (CHAR*)malloc(utf8Size);
-    if (!utf8Buffer)
+    // Определяем кодировку для сохранения на основе расширения файла
+    UINT saveCodePage = CP_UTF8; // По умолчанию UTF-8
+    
+    // Получаем расширение файла
+    WCHAR* fileExt = wcsrchr(currentFileName, L'.');
+    if (fileExt)
+    {
+        // Для текстовых и кодовых файлов используем UTF-8
+        if (_wcsicmp(fileExt, L".txt") == 0 ||
+            _wcsicmp(fileExt, L".c") == 0 ||
+            _wcsicmp(fileExt, L".cpp") == 0 ||
+            _wcsicmp(fileExt, L".h") == 0 ||
+            _wcsicmp(fileExt, L".hpp") == 0 ||
+            _wcsicmp(fileExt, L".cs") == 0 ||
+            _wcsicmp(fileExt, L".java") == 0 ||
+            _wcsicmp(fileExt, L".js") == 0 ||
+            _wcsicmp(fileExt, L".html") == 0 ||
+            _wcsicmp(fileExt, L".css") == 0 ||
+            _wcsicmp(fileExt, L".xml") == 0 ||
+            _wcsicmp(fileExt, L".json") == 0 ||
+            _wcsicmp(fileExt, L".py") == 0 ||
+            _wcsicmp(fileExt, L".php") == 0 ||
+            _wcsicmp(fileExt, L".rb") == 0 ||
+            _wcsicmp(fileExt, L".pl") == 0 ||
+            _wcsicmp(fileExt, L".sh") == 0)
+        {
+            saveCodePage = CP_UTF8;
+        }
+        // Для других файлов используем системную кодировку
+        else
+        {
+            saveCodePage = CP_ACP;
+        }
+    }
+    
+    // Конвертируем в выбранную кодировку
+    int bufferSize = WideCharToMultiByte(saveCodePage, 0, textBuffer, -1, NULL, 0, NULL, NULL);
+    CHAR* saveBuffer = (CHAR*)malloc(bufferSize);
+    if (!saveBuffer)
     {
         free(textBuffer);
         MessageBoxW(hWnd, L"Недостаточно памяти", L"Ошибка", MB_OK | MB_ICONERROR);
         return FALSE;
     }
 
-    WideCharToMultiByte(CP_UTF8, 0, textBuffer, -1, utf8Buffer, utf8Size, NULL, NULL);
+    WideCharToMultiByte(saveCodePage, 0, textBuffer, -1, saveBuffer, bufferSize, NULL, NULL);
 
     // Создаем/перезаписываем файл
     HANDLE hFile = CreateFileW(
@@ -657,7 +780,7 @@ BOOL SaveTextFile(HWND hWnd)
     if (hFile != INVALID_HANDLE_VALUE)
     {
         DWORD bytesWritten;
-        if (WriteFile(hFile, utf8Buffer, (DWORD)strlen(utf8Buffer), &bytesWritten, NULL))
+        if (WriteFile(hFile, saveBuffer, (DWORD)strlen(saveBuffer), &bytesWritten, NULL))
         {
             SetFileModified(FALSE);
             UpdateWindowTitle(hWnd);
@@ -675,7 +798,7 @@ BOOL SaveTextFile(HWND hWnd)
     }
 
     free(textBuffer);
-    free(utf8Buffer);
+    free(saveBuffer);
     return success;
 }
 
@@ -697,17 +820,21 @@ BOOL SaveTextFileAs(HWND hWnd)
     LoadStringA(hInst, IDS_SAVE_FILE_TITLE, titleAnsi, MAX_LOADSTRING);
     MultiByteToWideChar(CP_ACP, 0, titleAnsi, -1, titleBuffer, MAX_LOADSTRING);
 
+    // Загружаем фильтры из ресурсов
+    WCHAR filterBuffer[MAX_LOADSTRING * 2];
+    LoadFileDialogFilters(filterBuffer, MAX_LOADSTRING * 2);
+
     ZeroMemory(&ofn, sizeof(ofn));
     ofn.lStructSize = sizeof(ofn);
     ofn.hwndOwner = hWnd;
     ofn.lpstrFile = szFile;
     ofn.nMaxFile = sizeof(szFile);
-    ofn.lpstrFilter = L"Текстовые файлы\0*.txt\0Все файлы\0*.*\0";
+    ofn.lpstrFilter = filterBuffer;
     ofn.nFilterIndex = 1;
     ofn.lpstrTitle = titleBuffer;
     ofn.Flags = OFN_OVERWRITEPROMPT | OFN_ENABLEHOOK | OFN_EXPLORER;
     ofn.lpfnHook = FileDialogHook;
-    ofn.lpstrDefExt = L"txt";
+    ofn.lpstrDefExt = L"*"; // Без расширения по умолчанию, пользователь сам выберет
 
     if (GetSaveFileName(&ofn))
     {
@@ -818,5 +945,27 @@ void UpdateWindowTitle(HWND hWnd)
     }
 
     SetWindowTextW(hWnd, title);
+}
+
+// Загрузка фильтров файлов из ресурсов
+void LoadFileDialogFilters(WCHAR* filterBuffer, int bufferSize)
+{
+    CHAR textFilterAnsi[MAX_LOADSTRING];
+    CHAR codeFilterAnsi[MAX_LOADSTRING];
+    CHAR allFilterAnsi[MAX_LOADSTRING];
+    LoadStringA(hInst, IDS_TEXT_FILES_FILTER, textFilterAnsi, MAX_LOADSTRING);
+    LoadStringA(hInst, IDS_CODE_FILES_FILTER, codeFilterAnsi, MAX_LOADSTRING);
+    LoadStringA(hInst, IDS_ALL_FILES_FILTER, allFilterAnsi, MAX_LOADSTRING);
+    
+    WCHAR textFilterWide[MAX_LOADSTRING];
+    WCHAR codeFilterWide[MAX_LOADSTRING];
+    WCHAR allFilterWide[MAX_LOADSTRING];
+    MultiByteToWideChar(CP_ACP, 0, textFilterAnsi, -1, textFilterWide, MAX_LOADSTRING);
+    MultiByteToWideChar(CP_ACP, 0, codeFilterAnsi, -1, codeFilterWide, MAX_LOADSTRING);
+    MultiByteToWideChar(CP_ACP, 0, allFilterAnsi, -1, allFilterWide, MAX_LOADSTRING);
+    
+    swprintf_s(filterBuffer, bufferSize, 
+        L"%s\0*.txt\0%s\0*.c;*.cpp;*.h;*.hpp;*.cs;*.java;*.js;*.html;*.css;*.xml;*.json;*.py;*.php;*.rb;*.pl;*.sh;*.bat;*.cmd\0%s\0*.*\0", 
+        textFilterWide, codeFilterWide, allFilterWide);
 }
 
