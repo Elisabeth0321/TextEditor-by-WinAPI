@@ -3,6 +3,7 @@
 
 #include "framework.h"
 #include "TextEditor.h"
+#include "RegistryManager.h"
 #include <commdlg.h>
 #include <commctrl.h>
 #include <locale.h>
@@ -33,6 +34,14 @@ WCHAR currentFileName[MAX_PATH] = { 0 };
 BOOL isFileModified = FALSE;
 BOOL hasFileName = FALSE;
 
+// Переменные для настроек
+RegistryManager* g_pRegistryManager = nullptr;
+LOGFONTW g_currentFont = { 0 };
+COLORREF g_textColor = RGB(0, 0, 0);
+COLORREF g_backgroundColor = RGB(255, 255, 255);
+HFONT g_hCurrentFont = NULL;
+HBRUSH g_hBackgroundBrush = NULL;
+
 // Forward declarations of functions included in this code module:
 ATOM                MyRegisterClass(HINSTANCE hInstance);
 BOOL                InitInstance(HINSTANCE, int);
@@ -48,7 +57,9 @@ UINT_PTR CALLBACK   FileDialogHook(HWND hDlg, UINT message, WPARAM wParam, LPARA
 // Функции для текстового редактора
 void                CreateEditControl(HWND hParent);
 void                ResizeEditControl(HWND hParent);
+BOOL                CreateNewFile(HWND hWnd);
 BOOL                OpenTextFile(HWND hWnd);
+BOOL                LoadFileContent(const WCHAR* filePath);
 BOOL                SaveTextFile(HWND hWnd);
 BOOL                SaveTextFileAs(HWND hWnd);
 void                CutText();
@@ -58,6 +69,14 @@ void                SetFileModified(BOOL modified);
 BOOL                PromptSaveChanges(HWND hWnd);
 void                UpdateWindowTitle(HWND hWnd);
 void                LoadFileDialogFilters(WCHAR* filterBuffer, int bufferSize);
+
+// Функции для работы с настройками
+void                LoadSettingsFromRegistry();
+void                SaveSettingsToRegistry();
+void                ApplyFontSettings();
+void                ApplyColorSettings();
+BOOL                ShowFontDialog();
+BOOL                ShowColorDialog(BOOL isTextColor);
 
 int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
     _In_opt_ HINSTANCE hPrevInstance,
@@ -84,6 +103,9 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
     icc.dwICC = ICC_WIN95_CLASSES;
     InitCommonControlsEx(&icc);
 
+    // Инициализируем менеджер реестра
+    g_pRegistryManager = new RegistryManager();
+
     // Загружаем заголовок и имя класса из ресурсов
     CHAR titleAnsi[MAX_LOADSTRING];
     LoadStringA(hInstance, IDS_APP_TITLE, titleAnsi, MAX_LOADSTRING);
@@ -106,6 +128,20 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
             TranslateMessage(&msg);
             DispatchMessage(&msg);
         }
+    }
+
+    // Очищаем ресурсы
+    if (g_hCurrentFont)
+    {
+        DeleteObject(g_hCurrentFont);
+    }
+    if (g_hBackgroundBrush)
+    {
+        DeleteObject(g_hBackgroundBrush);
+    }
+    if (g_pRegistryManager)
+    {
+        delete g_pRegistryManager;
     }
 
     return (int)msg.wParam;
@@ -201,6 +237,9 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         
         // Создаем многострочный EDIT-контрол
         CreateEditControl(hWnd);
+        
+        // Загружаем настройки из реестра (после создания EditControl)
+        LoadSettingsFromRegistry();
         UpdateWindowTitle(hWnd);
     }
     break;
@@ -210,6 +249,16 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         // Parse the menu selections:
         switch (wmId)
         {
+        case IDM_FILE_NEW:
+        {
+            // Проверяем, нужно ли сохранить изменения
+            if (isFileModified && !PromptSaveChanges(hWnd))
+            {
+                break; // Пользователь отменил операцию
+            }
+            CreateNewFile(hWnd);
+        }
+        break;
         case IDM_FILE_OPEN:
         {
             // Проверяем, нужно ли сохранить изменения
@@ -241,10 +290,29 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         case IDM_EDIT_PASTE:
             PasteText();
             break;
+        case IDM_SETTINGS_FONT:
+            if (ShowFontDialog())
+            {
+                ApplyFontSettings();
+                SaveSettingsToRegistry();
+            }
+            break;
+        case IDM_SETTINGS_BG_COLOR:
+            if (ShowColorDialog(FALSE))
+            {
+                ApplyColorSettings();
+                SaveSettingsToRegistry();
+            }
+            break;
         case IDM_ABOUT:
             DialogBox(hInst, MAKEINTRESOURCE(IDD_ABOUTBOX), hWnd, About);
             break;
         case IDM_EXIT:
+            // Проверяем, нужно ли сохранить изменения перед выходом
+            if (isFileModified && !PromptSaveChanges(hWnd))
+            {
+                break; // Пользователь отменил операцию
+            }
             DestroyWindow(hWnd);
             break;
         default:
@@ -287,6 +355,22 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         GetClientRect(hWnd, &clientRect);
         ResizeEditControl(hWnd);
         break;
+    case WM_CTLCOLOREDIT:
+    {
+        HDC hdc = (HDC)wParam;
+        SetTextColor(hdc, g_textColor);
+        SetBkColor(hdc, g_backgroundColor);
+        
+        // Удаляем старую кисть
+        if (g_hBackgroundBrush)
+        {
+            DeleteObject(g_hBackgroundBrush);
+        }
+        
+        // Создаем новую кисть
+        g_hBackgroundBrush = CreateSolidBrush(g_backgroundColor);
+        return (LRESULT)g_hBackgroundBrush;
+    }
     case WM_CLOSE:
         // Проверяем, нужно ли сохранить изменения перед выходом
         if (isFileModified && !PromptSaveChanges(hWnd))
@@ -295,8 +379,17 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         }
         DestroyWindow(hWnd);
         break;
+    case WM_QUERYENDSESSION:
+        // Проверяем, нужно ли сохранить изменения при завершении системы
+        if (isFileModified && !PromptSaveChanges(hWnd))
+        {
+            return FALSE; // Отменяем завершение
+        }
+        return TRUE; // Разрешаем завершение
     case WM_DESTROY:
         KillTimer(hWnd, TIMER_IDLE);
+        // Сохраняем настройки в реестр
+        SaveSettingsToRegistry();
         PostQuitMessage(0);
         break;
     default:
@@ -503,14 +596,9 @@ void CreateEditControl(HWND hParent)
 
     if (hEditControl)
     {
-        // Устанавливаем шрифт по умолчанию
-        HFONT hFont = CreateFontW(
-            16, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
-            DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-            DEFAULT_QUALITY, DEFAULT_PITCH | FF_DONTCARE,
-            L"Consolas"
-        );
-        SendMessage(hEditControl, WM_SETFONT, (WPARAM)hFont, TRUE);
+        // Применяем настройки шрифта и цветов
+        ApplyFontSettings();
+        ApplyColorSettings();
         
         // Устанавливаем фокус на EDIT-контрол
         SetFocus(hEditControl);
@@ -528,6 +616,38 @@ void ResizeEditControl(HWND hParent)
                     rect.right, rect.bottom, 
                     SWP_NOZORDER);
     }
+}
+
+// Создание нового файла
+BOOL CreateNewFile(HWND hWnd)
+{
+    // Очищаем содержимое EDIT-контрола
+    if (hEditControl)
+    {
+        SetWindowTextW(hEditControl, L"");
+    }
+    
+    // Сбрасываем информацию о текущем файле
+    currentFileName[0] = L'\0';
+    hasFileName = FALSE;
+    SetFileModified(FALSE);
+    
+    // Сохраняем состояние "новый файл" в реестре
+    if (g_pRegistryManager)
+    {
+        g_pRegistryManager->SaveLastFileState(FALSE); // FALSE означает "новый файл"
+    }
+    
+    // Обновляем заголовок окна
+    UpdateWindowTitle(hWnd);
+    
+    // Устанавливаем фокус на EDIT-контрол
+    if (hEditControl)
+    {
+        SetFocus(hEditControl);
+    }
+    
+    return TRUE;
 }
 
 // Открытие текстового файла
@@ -609,6 +729,13 @@ BOOL OpenTextFile(HWND hWnd)
                             wcscpy_s(currentFileName, MAX_PATH, szFile);
                             hasFileName = TRUE;
                             SetFileModified(FALSE);
+                            
+                            // Сохраняем состояние "файл открыт" в реестре
+                            if (g_pRegistryManager)
+                            {
+                                g_pRegistryManager->SaveLastFileState(TRUE);
+                            }
+                            
                             UpdateWindowTitle(hWnd);
                             
                             free(buffer);
@@ -621,7 +748,7 @@ BOOL OpenTextFile(HWND hWnd)
                                  (unsigned char)buffer[1] == 0xFF)
                         {
                             // Конвертируем UTF-16 BE в UTF-16 LE
-                            for (int i = 0; i < bytesRead - 1; i += 2)
+                            for (DWORD i = 0; i < bytesRead - 1; i += 2)
                             {
                                 char temp = buffer[i];
                                 buffer[i] = buffer[i + 1];
@@ -634,6 +761,13 @@ BOOL OpenTextFile(HWND hWnd)
                             wcscpy_s(currentFileName, MAX_PATH, szFile);
                             hasFileName = TRUE;
                             SetFileModified(FALSE);
+                            
+                            // Сохраняем состояние "файл открыт" в реестре
+                            if (g_pRegistryManager)
+                            {
+                                g_pRegistryManager->SaveLastFileState(TRUE);
+                            }
+                            
                             UpdateWindowTitle(hWnd);
                             
                             free(buffer);
@@ -679,6 +813,13 @@ BOOL OpenTextFile(HWND hWnd)
                             wcscpy_s(currentFileName, MAX_PATH, szFile);
                             hasFileName = TRUE;
                             SetFileModified(FALSE);
+                            
+                            // Сохраняем состояние "файл открыт" в реестре
+                            if (g_pRegistryManager)
+                            {
+                                g_pRegistryManager->SaveLastFileState(TRUE);
+                            }
+                            
                             UpdateWindowTitle(hWnd);
                             
                             free(wideBuffer);
@@ -695,6 +836,135 @@ BOOL OpenTextFile(HWND hWnd)
             MessageBoxW(hWnd, L"Не удалось открыть файл", L"Ошибка", MB_OK | MB_ICONERROR);
         }
     }
+    return FALSE;
+}
+
+// Загрузка содержимого файла без диалога выбора
+BOOL LoadFileContent(const WCHAR* filePath)
+{
+    if (!hEditControl || !filePath || wcslen(filePath) == 0)
+        return FALSE;
+    
+    // Проверяем существование файла
+    DWORD fileAttributes = GetFileAttributesW(filePath);
+    if (fileAttributes == INVALID_FILE_ATTRIBUTES || (fileAttributes & FILE_ATTRIBUTE_DIRECTORY))
+        return FALSE;
+
+    HANDLE hFile = CreateFileW(
+        filePath,
+        GENERIC_READ,
+        FILE_SHARE_READ,
+        NULL,
+        OPEN_EXISTING,
+        FILE_ATTRIBUTE_NORMAL,
+        NULL
+    );
+
+    if (hFile != INVALID_HANDLE_VALUE)
+    {
+        DWORD fileSize = GetFileSize(hFile, NULL);
+        if (fileSize != INVALID_FILE_SIZE)
+        {
+            // Выделяем память для содержимого файла
+            CHAR* buffer = (CHAR*)malloc(fileSize + 1);
+            if (buffer)
+            {
+                DWORD bytesRead;
+                if (ReadFile(hFile, buffer, fileSize, &bytesRead, NULL))
+                {
+                    buffer[bytesRead] = '\0';
+                    
+                    // Определяем кодировку файла
+                    UINT codePage = CP_UTF8; // По умолчанию UTF-8
+                    
+                    // Проверяем BOM для UTF-8
+                    if (bytesRead >= 3 && 
+                        (unsigned char)buffer[0] == 0xEF && 
+                        (unsigned char)buffer[1] == 0xBB && 
+                        (unsigned char)buffer[2] == 0xBF)
+                    {
+                        codePage = CP_UTF8;
+                        // Пропускаем BOM
+                        memmove(buffer, buffer + 3, bytesRead - 3);
+                        buffer[bytesRead - 3] = '\0';
+                    }
+                    // Проверяем BOM для UTF-16 LE
+                    else if (bytesRead >= 2 && 
+                             (unsigned char)buffer[0] == 0xFF && 
+                             (unsigned char)buffer[1] == 0xFE)
+                    {
+                        // Файл уже в UTF-16 LE, читаем напрямую
+                        WCHAR* wideBuffer = (WCHAR*)buffer;
+                        SetWindowTextW(hEditControl, wideBuffer);
+                        
+                        free(buffer);
+                        CloseHandle(hFile);
+                        return TRUE;
+                    }
+                    // Проверяем BOM для UTF-16 BE
+                    else if (bytesRead >= 2 && 
+                             (unsigned char)buffer[0] == 0xFE && 
+                             (unsigned char)buffer[1] == 0xFF)
+                    {
+                        // Конвертируем UTF-16 BE в UTF-16 LE
+                        for (DWORD i = 0; i < bytesRead - 1; i += 2)
+                        {
+                            char temp = buffer[i];
+                            buffer[i] = buffer[i + 1];
+                            buffer[i + 1] = temp;
+                        }
+                        WCHAR* wideBuffer = (WCHAR*)buffer;
+                        SetWindowTextW(hEditControl, wideBuffer);
+                        
+                        free(buffer);
+                        CloseHandle(hFile);
+                        return TRUE;
+                    }
+                    // Пробуем определить кодировку по содержимому
+                    else
+                    {
+                        // Сначала пробуем UTF-8
+                        int wideSize = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, buffer, -1, NULL, 0);
+                        if (wideSize > 0)
+                        {
+                            codePage = CP_UTF8;
+                        }
+                        else
+                        {
+                            // Если не UTF-8, пробуем системную кодировку (обычно CP1251 для русского)
+                            wideSize = MultiByteToWideChar(CP_ACP, 0, buffer, -1, NULL, 0);
+                            if (wideSize > 0)
+                            {
+                                codePage = CP_ACP;
+                            }
+                            else
+                            {
+                                // Последняя попытка - CP1252 (Latin-1)
+                                codePage = 1252;
+                            }
+                        }
+                    }
+                    
+                    // Конвертируем в Unicode
+                    int wideSize = MultiByteToWideChar(codePage, 0, buffer, -1, NULL, 0);
+                    WCHAR* wideBuffer = (WCHAR*)malloc(wideSize * sizeof(WCHAR));
+                    if (wideBuffer)
+                    {
+                        MultiByteToWideChar(codePage, 0, buffer, -1, wideBuffer, wideSize);
+                        
+                        // Устанавливаем текст в EDIT-контрол
+                        SetWindowTextW(hEditControl, wideBuffer);
+                        
+                        free(wideBuffer);
+                    }
+                }
+                free(buffer);
+            }
+        }
+        CloseHandle(hFile);
+        return TRUE;
+    }
+    
     return FALSE;
 }
 
@@ -838,6 +1108,13 @@ BOOL SaveTextFileAs(HWND hWnd)
     {
         wcscpy_s(currentFileName, MAX_PATH, szFile);
         hasFileName = TRUE;
+        
+        // Сохраняем состояние "файл открыт" в реестре
+        if (g_pRegistryManager)
+        {
+            g_pRegistryManager->SaveLastFileState(TRUE);
+        }
+        
         return SaveTextFile(hWnd);
     }
     return FALSE;
@@ -889,28 +1166,47 @@ BOOL PromptSaveChanges(HWND hWnd)
     }
 
     WCHAR message[512];
+    WCHAR title[128];
+    
+    // Формируем сообщение в зависимости от того, есть ли имя файла
     if (hasFileName)
     {
-        swprintf_s(message, 512, L"Файл \"%s\" был изменен.\n\nСохранить изменения?", 
-                  wcsrchr(currentFileName, L'\\') ? wcsrchr(currentFileName, L'\\') + 1 : currentFileName);
+        const WCHAR* fileName = wcsrchr(currentFileName, L'\\');
+        if (fileName)
+            fileName = fileName + 1; // Пропускаем символ '\'
+        else
+            fileName = currentFileName;
+            
+        swprintf_s(message, 512, L"Файл \"%s\" был изменен.\n\nСохранить изменения?", fileName);
+        wcscpy_s(title, 128, L"Сохранение файла");
     }
     else
     {
         wcscpy_s(message, 512, L"Документ был изменен.\n\nСохранить изменения?");
+        wcscpy_s(title, 128, L"Сохранение документа");
     }
 
-    int result = MessageBoxW(hWnd, message, L"Сохранение", 
+    int result = MessageBoxW(hWnd, message, title, 
                             MB_YESNOCANCEL | MB_ICONQUESTION);
 
     switch (result)
     {
     case IDYES:
-        return SaveTextFile(hWnd);
+        // Пытаемся сохранить файл
+        if (hasFileName)
+        {
+            return SaveTextFile(hWnd);
+        }
+        else
+        {
+            // Если файл не был сохранен ранее, показываем диалог "Сохранить как"
+            return SaveTextFileAs(hWnd);
+        }
     case IDNO:
-        return TRUE;
+        return TRUE; // Продолжаем без сохранения
     case IDCANCEL:
     default:
-        return FALSE;
+        return FALSE; // Отменяем операцию
     }
 }
 
@@ -966,5 +1262,176 @@ void LoadFileDialogFilters(WCHAR* filterBuffer, int bufferSize)
     // Формат: "Описание\0маска\0\0" - заканчивается двойным нулем
     swprintf_s(filterBuffer, bufferSize, 
         L"\0*.*\0\0");
+}
+
+// Загрузка настроек из реестра
+void LoadSettingsFromRegistry()
+{
+    if (!g_pRegistryManager)
+        return;
+
+    // Загружаем настройки шрифта
+    g_pRegistryManager->LoadFontSettings(g_currentFont);
+    
+    // Загружаем цвета
+    g_pRegistryManager->LoadTextColor(g_textColor);
+    g_pRegistryManager->LoadBackgroundColor(g_backgroundColor);
+    
+    // Загружаем состояние файла (открыт/новый)
+    BOOL savedFileState = FALSE;
+    g_pRegistryManager->LoadLastFileState(savedFileState);
+    
+    // Загружаем последний открытый файл только если состояние указывает на открытый файл
+    if (savedFileState)
+    {
+        std::wstring lastFile;
+        if (g_pRegistryManager->LoadLastFile(lastFile) && !lastFile.empty())
+        {
+            wcscpy_s(currentFileName, MAX_PATH, lastFile.c_str());
+            hasFileName = TRUE;
+            
+            // Загружаем содержимое файла в EditControl
+            if (!LoadFileContent(currentFileName))
+            {
+                // Если файл не удалось загрузить, сбрасываем состояние
+                hasFileName = FALSE;
+                currentFileName[0] = L'\0';
+                SetFileModified(FALSE);
+            }
+            else
+            {
+                // Файл успешно загружен, сбрасываем флаг изменения
+                SetFileModified(FALSE);
+            }
+        }
+        else
+        {
+            // Если состояние говорит о открытом файле, но файл не найден, сбрасываем состояние
+            hasFileName = FALSE;
+            currentFileName[0] = L'\0';
+        }
+    }
+    else
+    {
+        // Состояние "новый файл" - очищаем поле
+        hasFileName = FALSE;
+        currentFileName[0] = L'\0';
+    }
+    
+    // Применяем загруженные настройки шрифта и цветов
+    ApplyFontSettings();
+    ApplyColorSettings();
+}
+
+// Сохранение настроек в реестр
+void SaveSettingsToRegistry()
+{
+    if (!g_pRegistryManager)
+        return;
+
+    // Сохраняем настройки шрифта
+    g_pRegistryManager->SaveFontSettings(g_currentFont);
+    
+    // Сохраняем цвета
+    g_pRegistryManager->SaveTextColor(g_textColor);
+    g_pRegistryManager->SaveBackgroundColor(g_backgroundColor);
+    
+    // Сохраняем состояние файла (открыт/новый)
+    g_pRegistryManager->SaveLastFileState(hasFileName);
+    
+    // Сохраняем последний открытый файл только если файл открыт
+    if (hasFileName)
+    {
+        g_pRegistryManager->SaveLastFile(currentFileName);
+    }
+}
+
+// Применение настроек шрифта
+void ApplyFontSettings()
+{
+    if (!hEditControl)
+        return;
+
+    // Удаляем старый шрифт
+    if (g_hCurrentFont)
+    {
+        DeleteObject(g_hCurrentFont);
+    }
+
+    // Создаем новый шрифт
+    g_hCurrentFont = CreateFontIndirectW(&g_currentFont);
+    if (g_hCurrentFont)
+    {
+        SendMessage(hEditControl, WM_SETFONT, (WPARAM)g_hCurrentFont, TRUE);
+    }
+}
+
+// Применение настроек цветов
+void ApplyColorSettings()
+{
+    if (!hEditControl)
+        return;
+
+    // Устанавливаем цвет фона через WM_CTLCOLOREDIT
+    // Для этого нужно перерисовать окно
+    InvalidateRect(hEditControl, NULL, TRUE);
+}
+
+// Диалог выбора шрифта
+BOOL ShowFontDialog()
+{
+    if (!hEditControl)
+        return FALSE;
+
+    CHOOSEFONTW cf = { 0 };
+    cf.lStructSize = sizeof(CHOOSEFONTW);
+    cf.hwndOwner = hMainWnd;
+    cf.lpLogFont = &g_currentFont;
+    cf.Flags = CF_INITTOLOGFONTSTRUCT | CF_SCREENFONTS | CF_EFFECTS;
+    cf.rgbColors = g_textColor;
+
+    if (ChooseFontW(&cf))
+    {
+        g_textColor = cf.rgbColors;
+        return TRUE;
+    }
+
+    return FALSE;
+}
+
+// Диалог выбора цвета
+BOOL ShowColorDialog(BOOL isTextColor)
+{
+    CHOOSECOLORW cc = { 0 };
+    static COLORREF customColors[16] = { 0 };
+
+    cc.lStructSize = sizeof(CHOOSECOLORW);
+    cc.hwndOwner = hMainWnd;
+    cc.lpCustColors = customColors;
+    cc.Flags = CC_RGBINIT | CC_FULLOPEN;
+
+    if (isTextColor)
+    {
+        cc.rgbResult = g_textColor;
+    }
+    else
+    {
+        cc.rgbResult = g_backgroundColor;
+    }
+
+    if (ChooseColorW(&cc))
+    {
+        if (isTextColor)
+        {
+            g_textColor = cc.rgbResult;
+        }
+        else
+        {
+            g_backgroundColor = cc.rgbResult;
+        }
+        return TRUE;
+    }
+
+    return FALSE;
 }
 

@@ -133,6 +133,7 @@
     <ClInclude Include="EditControlManager.h" />
     <ClInclude Include="FileManager.h" />
     <ClInclude Include="framework.h" />
+    <ClInclude Include="RegistryManager.h" />
     <ClInclude Include="Resource.h" />
     <ClInclude Include="targetver.h" />
     <ClInclude Include="TextEditor.h" />
@@ -144,6 +145,7 @@
     <ClCompile Include="DarkScreenManager.cpp" />
     <ClCompile Include="EditControlManager.cpp" />
     <ClCompile Include="FileManager.cpp" />
+    <ClCompile Include="RegistryManager.cpp" />
     <ClCompile Include="TextEditor.cpp" />
     <ClCompile Include="WindowManager.cpp" />
   </ItemGroup>
