@@ -554,8 +554,7 @@ BOOL OpenTextFile(HWND hWnd)
     ofn.lpstrFilter = filterBuffer;
     ofn.nFilterIndex = 1;
     ofn.lpstrTitle = titleBuffer;
-    ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST | OFN_ENABLEHOOK | OFN_EXPLORER;
-    ofn.lpfnHook = FileDialogHook;
+    ofn.Flags = OFN_EXPLORER | OFN_FILEMUSTEXIST | OFN_HIDEREADONLY;
 
     if (GetOpenFileName(&ofn))
     {
@@ -832,9 +831,8 @@ BOOL SaveTextFileAs(HWND hWnd)
     ofn.lpstrFilter = filterBuffer;
     ofn.nFilterIndex = 1;
     ofn.lpstrTitle = titleBuffer;
-    ofn.Flags = OFN_OVERWRITEPROMPT | OFN_ENABLEHOOK | OFN_EXPLORER;
-    ofn.lpfnHook = FileDialogHook;
-    ofn.lpstrDefExt = L"*"; // Без расширения по умолчанию, пользователь сам выберет
+    ofn.Flags = OFN_OVERWRITEPROMPT | OFN_EXPLORER;
+    ofn.lpstrDefExt = L""; // Без расширения по умолчанию, пользователь сам выберет
 
     if (GetSaveFileName(&ofn))
     {
@@ -964,8 +962,9 @@ void LoadFileDialogFilters(WCHAR* filterBuffer, int bufferSize)
     MultiByteToWideChar(CP_ACP, 0, codeFilterAnsi, -1, codeFilterWide, MAX_LOADSTRING);
     MultiByteToWideChar(CP_ACP, 0, allFilterAnsi, -1, allFilterWide, MAX_LOADSTRING);
     
+    // Простой фильтр для отображения всех файлов
+    // Формат: "Описание\0маска\0\0" - заканчивается двойным нулем
     swprintf_s(filterBuffer, bufferSize, 
-        L"%s\0*.txt\0%s\0*.c;*.cpp;*.h;*.hpp;*.cs;*.java;*.js;*.html;*.css;*.xml;*.json;*.py;*.php;*.rb;*.pl;*.sh;*.bat;*.cmd\0%s\0*.*\0", 
-        textFilterWide, codeFilterWide, allFilterWide);
+        L"\0*.*\0\0");
 }
 

@@ -1,6 +1,7 @@
 #include "Application.h"
 #include "Resource.h"
 #include <commctrl.h>
+#include <locale.h>
 
 Application::Application(HINSTANCE hInstance)
     : m_hInstance(hInstance)

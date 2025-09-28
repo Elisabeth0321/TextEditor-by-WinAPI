@@ -25,11 +25,10 @@ BOOL FileManager::openTextFile(HWND hWnd)
     ofn.hwndOwner = hWnd;
     ofn.lpstrFile = szFile;
     ofn.nMaxFile = sizeof(szFile);
-    ofn.lpstrFilter = L"Текстовые файлы\0*.txt\0Все файлы\0*.*\0";
+    ofn.lpstrFilter = L"Все файлы\0*.*\0\0";
     ofn.nFilterIndex = 1;
     ofn.lpstrTitle = title.c_str();
-    ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST | OFN_ENABLEHOOK | OFN_EXPLORER;
-    ofn.lpfnHook = fileDialogHook;
+    ofn.Flags = OFN_EXPLORER | OFN_FILEMUSTEXIST | OFN_HIDEREADONLY;
 
     if (GetOpenFileName(&ofn))
     {
@@ -160,12 +159,11 @@ BOOL FileManager::saveTextFileAs(HWND hWnd)
     ofn.hwndOwner = hWnd;
     ofn.lpstrFile = szFile;
     ofn.nMaxFile = sizeof(szFile);
-    ofn.lpstrFilter = L"Текстовые файлы\0*.txt\0Все файлы\0*.*\0";
+    ofn.lpstrFilter = L"Все файлы\0*.*\0\0";
     ofn.nFilterIndex = 1;
     ofn.lpstrTitle = title.c_str();
-    ofn.Flags = OFN_OVERWRITEPROMPT | OFN_ENABLEHOOK | OFN_EXPLORER;
-    ofn.lpfnHook = fileDialogHook;
-    ofn.lpstrDefExt = L"txt";
+    ofn.Flags = OFN_OVERWRITEPROMPT | OFN_EXPLORER;
+    ofn.lpstrDefExt = L""; // Без расширения по умолчанию, пользователь сам выберет
 
     if (GetSaveFileName(&ofn))
     {

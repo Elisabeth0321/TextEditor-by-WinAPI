@@ -303,6 +303,7 @@ INT_PTR CALLBACK WindowManager::aboutDialogProc(HWND hDlg, UINT message, WPARAM 
     switch (message)
     {
     case WM_INITDIALOG:
+    {
         // Центрируем диалог
         RECT dialogRect;
         GetWindowRect(hDlg, &dialogRect);
@@ -317,6 +318,7 @@ INT_PTR CALLBACK WindowManager::aboutDialogProc(HWND hDlg, UINT message, WPARAM 
 
         SetWindowPos(hDlg, NULL, x, y, 0, 0, SWP_NOSIZE | SWP_NOZORDER);
         return (INT_PTR)TRUE;
+    }
 
     case WM_COMMAND:
         if (LOWORD(wParam) == IDOK || LOWORD(wParam) == IDCANCEL)

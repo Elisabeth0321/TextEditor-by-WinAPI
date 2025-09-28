@@ -2,6 +2,7 @@
 
 #include "framework.h"
 #include <string>
+#include <functional>
 
 /**
  * @brief Менеджер для управления окнами и диалогами
