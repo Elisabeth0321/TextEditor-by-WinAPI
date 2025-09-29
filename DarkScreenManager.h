@@ -76,6 +76,20 @@ public:
      */
     void handleTimer(HWND hWnd, UINT_PTR timerId);
 
+    /**
+     * @brief Проверить, является ли клавиша клавишей управления спрайтом
+     * @param vkCode Код виртуальной клавиши
+     * @return TRUE если клавиша управляет спрайтом, FALSE в противном случае
+     */
+    BOOL isSpriteControlKey(WPARAM vkCode) const;
+
+    /**
+     * @brief Вернуть фокус в режим редактирования
+     * @param hMainWnd Дескриптор главного окна
+     * @param vkCode Код виртуальной клавиши для передачи в EditControl
+     */
+    void returnToEditMode(HWND hMainWnd, WPARAM vkCode = 0);
+
 private:
     HINSTANCE m_hInstance;                    ///< Дескриптор экземпляра приложения
     HWND m_hDarkScreen;                       ///< Дескриптор темного экрана
@@ -83,11 +97,22 @@ private:
     POINT m_spritePos;                        ///< Позиция спрайта
     POINT m_spriteVelocity;                   ///< Скорость движения спрайта
     RECT m_clientRect;                        ///< Размеры клиентской области
+    
+    // Состояние клавиш управления
+    BOOL m_keyW;                              ///< Состояние клавиши W
+    BOOL m_keyA;                              ///< Состояние клавиши A
+    BOOL m_keyS;                              ///< Состояние клавиши S
+    BOOL m_keyD;                              ///< Состояние клавиши D
+    BOOL m_keyUp;                             ///< Состояние клавиши стрелка вверх
+    BOOL m_keyDown;                           ///< Состояние клавиши стрелка вниз
+    BOOL m_keyLeft;                           ///< Состояние клавиши стрелка влево
+    BOOL m_keyRight;                          ///< Состояние клавиши стрелка вправо
 
     static const UINT TIMER_IDLE = 1;         ///< ID таймера неактивности
     static const UINT TIMER_ANIMATION = 2;    ///< ID таймера анимации
     static const UINT IDLE_TIMEOUT = 5000;    ///< Время неактивности по умолчанию
     static const UINT ANIMATION_INTERVAL = 50; ///< Интервал анимации
+    static const int SPRITE_SPEED = 5;        ///< Скорость движения спрайта
 
     /**
      * @brief Обновить позицию спрайта

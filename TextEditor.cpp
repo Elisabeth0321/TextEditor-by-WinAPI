@@ -4,6 +4,7 @@
 #include "framework.h"
 #include "TextEditor.h"
 #include "RegistryManager.h"
+#include "DarkScreenManager.h"
 #include <commdlg.h>
 #include <commctrl.h>
 #include <locale.h>
@@ -21,12 +22,9 @@ WCHAR szTitle[MAX_LOADSTRING];                  // The title bar text
 WCHAR szWindowClass[MAX_LOADSTRING];            // the main window class name
 
 // Переменные для темного экрана
-HWND hDarkScreen = NULL;
 HWND hMainWnd = NULL;
-POINT spritePos = { 100, 100 };
-POINT spriteVelocity = { 2, 2 };
 RECT clientRect;
-BOOL isDarkScreenActive = FALSE;
+DarkScreenManager* g_pDarkScreenManager = nullptr;
 
 // Переменные для текстового редактора
 HWND hEditControl = NULL;
@@ -47,10 +45,6 @@ ATOM                MyRegisterClass(HINSTANCE hInstance);
 BOOL                InitInstance(HINSTANCE, int);
 LRESULT CALLBACK    WndProc(HWND, UINT, WPARAM, LPARAM);
 INT_PTR CALLBACK    About(HWND, UINT, WPARAM, LPARAM);
-LRESULT CALLBACK    DarkScreenProc(HWND, UINT, WPARAM, LPARAM);
-void                ShowDarkScreen(HWND hParent);
-void                HideDarkScreen();
-void                UpdateSprite();
 void                CenterDialog(HWND hDlg);
 UINT_PTR CALLBACK   FileDialogHook(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam);
 
@@ -105,6 +99,9 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 
     // Инициализируем менеджер реестра
     g_pRegistryManager = new RegistryManager();
+    
+    // Инициализируем менеджер темного экрана
+    g_pDarkScreenManager = new DarkScreenManager(hInstance);
 
     // Загружаем заголовок и имя класса из ресурсов
     CHAR titleAnsi[MAX_LOADSTRING];
@@ -142,6 +139,10 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
     if (g_pRegistryManager)
     {
         delete g_pRegistryManager;
+    }
+    if (g_pDarkScreenManager)
+    {
+        delete g_pDarkScreenManager;
     }
 
     return (int)msg.wParam;
@@ -334,9 +335,9 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
     }
     break;
     case WM_TIMER:
-        if (wParam == TIMER_IDLE && !isDarkScreenActive)
+        if (g_pDarkScreenManager)
         {
-            ShowDarkScreen(hWnd);
+            g_pDarkScreenManager->handleTimer(hWnd, wParam);
         }
         break;
     case WM_MOUSEMOVE:
@@ -344,12 +345,10 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
     case WM_RBUTTONDOWN:
     case WM_KEYDOWN:
         // Сбрасываем таймер при активности пользователя
-        if (isDarkScreenActive)
+        if (g_pDarkScreenManager)
         {
-            HideDarkScreen();
+            g_pDarkScreenManager->handleUserActivity(hWnd);
         }
-        KillTimer(hWnd, TIMER_IDLE);
-        SetTimer(hWnd, TIMER_IDLE, IDLE_TIMEOUT, NULL);
         break;
     case WM_SIZE:
         GetClientRect(hWnd, &clientRect);
@@ -387,12 +386,24 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         }
         return TRUE; // Разрешаем завершение
     case WM_DESTROY:
-        KillTimer(hWnd, TIMER_IDLE);
+        if (g_pDarkScreenManager)
+        {
+            g_pDarkScreenManager->killIdleTimer(hWnd);
+        }
         // Сохраняем настройки в реестр
         SaveSettingsToRegistry();
         PostQuitMessage(0);
         break;
     default:
+        // Передаем сообщения в DarkScreenManager для обработки
+        if (g_pDarkScreenManager)
+        {
+            LRESULT result = g_pDarkScreenManager->handleDarkScreenMessage(hWnd, message, wParam, lParam);
+            if (result != 0)
+            {
+                return result;
+            }
+        }
         return DefWindowProc(hWnd, message, wParam, lParam);
     }
     return 0;
@@ -420,131 +431,6 @@ INT_PTR CALLBACK About(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam)
 }
 
 
-// Функция для показа темного экрана
-void ShowDarkScreen(HWND hParent)
-{
-    if (isDarkScreenActive) return;
-
-    // Получаем размеры родительского окна
-    RECT parentRect;
-    GetWindowRect(hParent, &parentRect);
-
-    // Создаем темное окно
-    hDarkScreen = CreateWindowExW(
-        WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
-        L"STATIC",
-        L"",
-        WS_POPUP | WS_VISIBLE,
-        parentRect.left,
-        parentRect.top,
-        parentRect.right - parentRect.left,
-        parentRect.bottom - parentRect.top,
-        hParent,
-        NULL,
-        hInst,
-        NULL
-    );
-
-    if (hDarkScreen)
-    {
-        SetWindowLongPtr(hDarkScreen, GWLP_WNDPROC, (LONG_PTR)DarkScreenProc);
-        SetTimer(hDarkScreen, 2, 50, NULL);
-        isDarkScreenActive = TRUE;
-        ShowCursor(FALSE);
-    }
-}
-
-// Функция для скрытия темного экрана
-void HideDarkScreen()
-{
-    if (!isDarkScreenActive) return;
-
-    if (hDarkScreen)
-    {
-        KillTimer(hDarkScreen, 2);
-        DestroyWindow(hDarkScreen);
-        hDarkScreen = NULL;
-    }
-
-    isDarkScreenActive = FALSE;
-    ShowCursor(TRUE);
-}
-
-// Процедура окна для темного экрана
-LRESULT CALLBACK DarkScreenProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
-{
-    switch (message)
-    {
-    case WM_PAINT:
-    {
-        PAINTSTRUCT ps;
-        HDC hdc = BeginPaint(hWnd, &ps);
-
-        // Заливаем экран черным цветом
-        RECT rect;
-        GetClientRect(hWnd, &rect);
-        HBRUSH blackBrush = CreateSolidBrush(RGB(0, 0, 0));
-        FillRect(hdc, &rect, blackBrush);
-        DeleteObject(blackBrush);
-
-        // Рисуем движущийся спрайт (белый круг)
-        HBRUSH whiteBrush = CreateSolidBrush(RGB(255, 255, 255));
-        HBRUSH oldBrush = (HBRUSH)SelectObject(hdc, whiteBrush);
-
-        Ellipse(hdc, spritePos.x - 10, spritePos.y - 10,
-            spritePos.x + 10, spritePos.y + 10);
-
-        SelectObject(hdc, oldBrush);
-        DeleteObject(whiteBrush);
-
-        EndPaint(hWnd, &ps);
-    }
-    break;
-    case WM_TIMER:
-        if (wParam == 2)
-        {
-            UpdateSprite();
-            InvalidateRect(hWnd, NULL, TRUE);
-        }
-        break;
-    case WM_MOUSEMOVE:
-    case WM_LBUTTONDOWN:
-    case WM_RBUTTONDOWN:
-    case WM_KEYDOWN:
-        HideDarkScreen();
-        break;
-    default:
-        return DefWindowProc(hWnd, message, wParam, lParam);
-    }
-    return 0;
-}
-
-// Функция для обновления позиции спрайта
-void UpdateSprite()
-{
-    RECT rect;
-    GetClientRect(hDarkScreen, &rect);
-
-    // Обновляем позицию спрайта
-    spritePos.x += spriteVelocity.x;
-    spritePos.y += spriteVelocity.y;
-
-    // Проверяем столкновения с границами
-    if (spritePos.x <= 10 || spritePos.x >= rect.right - 10)
-    {
-        spriteVelocity.x = -spriteVelocity.x;
-    }
-    if (spritePos.y <= 10 || spritePos.y >= rect.bottom - 10)
-    {
-        spriteVelocity.y = -spriteVelocity.y;
-    }
-
-    // Ограничиваем позицию в пределах окна
-    if (spritePos.x < 10) spritePos.x = 10;
-    if (spritePos.x > rect.right - 10) spritePos.x = rect.right - 10;
-    if (spritePos.y < 10) spritePos.y = 10;
-    if (spritePos.y > rect.bottom - 10) spritePos.y = rect.bottom - 10;
-}
 
 // Функция для центрирования диалогового окна на экране
 void CenterDialog(HWND hDlg)

@@ -4,11 +4,19 @@ DarkScreenManager::DarkScreenManager(HINSTANCE hInstance)
     : m_hInstance(hInstance)
     , m_hDarkScreen(NULL)
     , m_isDarkScreenActive(FALSE)
+    , m_keyW(FALSE)
+    , m_keyA(FALSE)
+    , m_keyS(FALSE)
+    , m_keyD(FALSE)
+    , m_keyUp(FALSE)
+    , m_keyDown(FALSE)
+    , m_keyLeft(FALSE)
+    , m_keyRight(FALSE)
 {
     m_spritePos.x = 100;
     m_spritePos.y = 100;
-    m_spriteVelocity.x = 2;
-    m_spriteVelocity.y = 2;
+    m_spriteVelocity.x = 0;  // Начинаем с нулевой скорости
+    m_spriteVelocity.y = 0;
 }
 
 DarkScreenManager::~DarkScreenManager()
@@ -116,10 +124,98 @@ LRESULT DarkScreenManager::handleDarkScreenMessage(HWND hWnd, UINT message, WPAR
                 InvalidateRect(hWnd, NULL, TRUE);
             }
             break;
+        case WM_KEYDOWN:
+        {
+            // Проверяем, является ли клавиша клавишей управления спрайтом
+            if (isSpriteControlKey(wParam))
+            {
+                // Обрабатываем нажатия клавиш для управления спрайтом
+                switch (wParam)
+                {
+                case 'W':
+                case 'w':
+                    m_keyW = TRUE;
+                    break;
+                case 'A':
+                case 'a':
+                    m_keyA = TRUE;
+                    break;
+                case 'S':
+                case 's':
+                    m_keyS = TRUE;
+                    break;
+                case 'D':
+                case 'd':
+                    m_keyD = TRUE;
+                    break;
+                case VK_UP:
+                    m_keyUp = TRUE;
+                    break;
+                case VK_DOWN:
+                    m_keyDown = TRUE;
+                    break;
+                case VK_LEFT:
+                    m_keyLeft = TRUE;
+                    break;
+                case VK_RIGHT:
+                    m_keyRight = TRUE;
+                    break;
+                }
+            }
+            else
+            {
+                // Для всех остальных клавиш возвращаемся в режим редактирования
+                // Получаем дескриптор главного окна из родительского окна
+                HWND hMainWnd = GetParent(hWnd);
+                if (hMainWnd)
+                {
+                    returnToEditMode(hMainWnd, wParam);
+                }
+            }
+        }
+        break;
+        case WM_KEYUP:
+        {
+            // Обрабатываем отпускание только клавиш управления спрайтом
+            if (isSpriteControlKey(wParam))
+            {
+                switch (wParam)
+                {
+                case 'W':
+                case 'w':
+                    m_keyW = FALSE;
+                    break;
+                case 'A':
+                case 'a':
+                    m_keyA = FALSE;
+                    break;
+                case 'S':
+                case 's':
+                    m_keyS = FALSE;
+                    break;
+                case 'D':
+                case 'd':
+                    m_keyD = FALSE;
+                    break;
+                case VK_UP:
+                    m_keyUp = FALSE;
+                    break;
+                case VK_DOWN:
+                    m_keyDown = FALSE;
+                    break;
+                case VK_LEFT:
+                    m_keyLeft = FALSE;
+                    break;
+                case VK_RIGHT:
+                    m_keyRight = FALSE;
+                    break;
+                }
+            }
+        }
+        break;
         case WM_MOUSEMOVE:
         case WM_LBUTTONDOWN:
         case WM_RBUTTONDOWN:
-        case WM_KEYDOWN:
             hideDarkScreen();
             break;
         default:
@@ -171,19 +267,31 @@ void DarkScreenManager::updateSprite()
     RECT rect;
     GetClientRect(m_hDarkScreen, &rect);
 
-    // Обновляем позицию спрайта
-    m_spritePos.x += m_spriteVelocity.x;
-    m_spritePos.y += m_spriteVelocity.y;
+    // Вычисляем скорость на основе нажатых клавиш
+    int velocityX = 0;
+    int velocityY = 0;
 
-    // Проверяем столкновения с границами
-    if (m_spritePos.x <= 10 || m_spritePos.x >= rect.right - 10)
+    // Обработка клавиш WASD и стрелок
+    if (m_keyA || m_keyLeft)
     {
-        m_spriteVelocity.x = -m_spriteVelocity.x;
+        velocityX -= SPRITE_SPEED;
     }
-    if (m_spritePos.y <= 10 || m_spritePos.y >= rect.bottom - 10)
+    if (m_keyD || m_keyRight)
     {
-        m_spriteVelocity.y = -m_spriteVelocity.y;
+        velocityX += SPRITE_SPEED;
     }
+    if (m_keyW || m_keyUp)
+    {
+        velocityY -= SPRITE_SPEED;
+    }
+    if (m_keyS || m_keyDown)
+    {
+        velocityY += SPRITE_SPEED;
+    }
+
+    // Обновляем позицию спрайта
+    m_spritePos.x += velocityX;
+    m_spritePos.y += velocityY;
 
     // Ограничиваем позицию в пределах окна
     if (m_spritePos.x < 10) m_spritePos.x = 10;
@@ -202,6 +310,49 @@ LRESULT CALLBACK DarkScreenManager::darkScreenProc(HWND hWnd, UINT message, WPAR
     return DefWindowProc(hWnd, message, wParam, lParam);
 }
 
+
+BOOL DarkScreenManager::isSpriteControlKey(WPARAM vkCode) const
+{
+    switch (vkCode)
+    {
+    case 'W':
+    case 'w':
+    case 'A':
+    case 'a':
+    case 'S':
+    case 's':
+    case 'D':
+    case 'd':
+    case VK_UP:
+    case VK_DOWN:
+    case VK_LEFT:
+    case VK_RIGHT:
+        return TRUE;
+    default:
+        return FALSE;
+    }
+}
+
+void DarkScreenManager::returnToEditMode(HWND hMainWnd, WPARAM vkCode)
+{
+    // Скрываем темный экран
+    hideDarkScreen();
+    
+    // Находим EditControl в главном окне
+    HWND hEditControl = FindWindowEx(hMainWnd, NULL, L"EDIT", NULL);
+    if (hEditControl)
+    {
+        // Устанавливаем фокус на EditControl
+        SetFocus(hEditControl);
+        
+        // Если была нажата клавиша, передаем её в EditControl
+        if (vkCode != 0)
+        {
+            // Отправляем сообщение о нажатии клавиши в EditControl
+            SendMessage(hEditControl, WM_KEYDOWN, vkCode, 0);
+        }
+    }
+}
 
 DarkScreenManager* DarkScreenManager::getInstanceFromWindow(HWND hWnd)
 {
